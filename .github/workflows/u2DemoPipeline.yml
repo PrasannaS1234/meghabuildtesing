@@ -1,0 +1,133 @@
+name: U2 Demo Build
+
+on:
+  push:
+    branches:
+      - u2-improvements
+  workflow_call:
+    inputs:
+      image_name:
+        type: string
+        required: true
+      flag_sast_analysis:
+        type: boolean
+        required: true
+      flag_vulnerability_check:
+        type: boolean
+        required: true
+      flag_image_build:
+        type: boolean
+        required: true
+      flag_image_scan:
+        type: boolean
+        required: true
+      flag_deploy:
+        type: boolean
+        required: true
+      flag_destroy:
+        type: boolean
+        required: true
+      service_name:
+        type: string
+        required: true
+      container_port:
+        type: number
+        required: true
+    secrets:
+      SNYK_TOKEN:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+  id-token: write
+
+env:
+  JAVA_VERSION: "21"
+  NODE_VERSION: "20"
+  SNYK_SEVERITY: "high"
+  AWS_REGION: "us-east-1"
+  IMAGE_TAG: "latest"
+
+jobs:
+  static-code-analysis:
+    name: Static Code Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve SAST flag
+        id: resolve
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "flag_sast_analysis=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag_sast_analysis=${{ inputs.flag_sast_analysis }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip when flag is false
+        if: ${{ steps.resolve.outputs.flag_sast_analysis != 'true' }}
+        run: echo "Static code analysis flag is false. Skipping and marking job as success."
+
+      - name: Detect project type
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' }}
+        id: detect
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "project_type=web" >> "$GITHUB_OUTPUT"
+            echo "codeql_language=javascript-typescript" >> "$GITHUB_OUTPUT"
+          elif [ -f gradlew ] || [ -f pom.xml ] || [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+            echo "project_type=api" >> "$GITHUB_OUTPUT"
+            echo "codeql_language=java-kotlin" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_type=unknown" >> "$GITHUB_OUTPUT"
+            echo "codeql_language=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail if supported project files are not found
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' && steps.detect.outputs.project_type == 'unknown' }}
+        run: |
+          echo "No supported project file found. Expected package.json or Gradle/Maven files."
+          exit 1
+
+      - name: Setup Node.js
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' && steps.detect.outputs.project_type == 'web' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install web dependencies
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' && steps.detect.outputs.project_type == 'web' }}
+        run: npm ci
+
+      - name: Setup Java
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' && steps.detect.outputs.project_type == 'api' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Initialize CodeQL
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' }}
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ steps.detect.outputs.codeql_language }}
+
+      - name: Autobuild
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' }}
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        if: ${{ steps.resolve.outputs.flag_sast_analysis == 'true' }}
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ steps.detect.outputs.codeql_language }}
+          upload: false
