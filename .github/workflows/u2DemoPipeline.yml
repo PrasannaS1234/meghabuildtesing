@@ -131,6 +131,7 @@ jobs:
         with:
           category: /language:${{ steps.detect.outputs.codeql_language }}
           upload: false
+          
 vulnerability-scan-analysis:
     name: Vulnerability Scan Analysis
     runs-on: ubuntu-latest
