@@ -3,7 +3,7 @@ name: U2 Demo Build
 on:
   push:
     branches:
-      - u2-improvements
+      - main
   workflow_call:
     inputs:
       image_name:
